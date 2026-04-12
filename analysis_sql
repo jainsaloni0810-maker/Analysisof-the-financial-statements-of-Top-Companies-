@@ -1,0 +1,101 @@
+--CREATE MERGED TABLE
+CREATE TABLE financial_data (
+    rank INT,
+    company_name VARCHAR(255),
+    symbol VARCHAR(20),
+    country VARCHAR(100),
+    market_cap DECIMAL(20,2),
+    price_gbp DECIMAL(10,4),
+    earnings_ttm DECIMAL(20,2),
+    revenue_ttm DECIMAL(20,2),
+    pe_ratio DECIMAL(12,4),
+    dividend_yield DECIMAL(12,4)
+);
+
+--ADD CALCULATED RATIO COLUMNS
+ALTER TABLE financial_data
+  ADD COLUMN profit_margin_pct     DECIMAL(12,4) AS (earnings_ttm / NULLIF(revenue_ttm,0) * 100),
+  ADD COLUMN earnings_yield_pct    DECIMAL(12,4) AS (1.0 / NULLIF(pe_ratio,0) * 100),
+  ADD COLUMN price_to_sales        DECIMAL(12,4) AS (market_cap / NULLIF(revenue_ttm,0)),
+  ADD COLUMN market_cap_to_earnings DECIMAL(12,4) AS (market_cap / NULLIF(earnings_ttm,0)),
+  ADD COLUMN revenue_per_market_cap DECIMAL(12,6) AS (revenue_ttm / NULLIF(market_cap,0));
+
+--COUNTRY PERFORMANCE SUMMARY
+SELECT
+    country,
+    COUNT(*) AS company_count,
+    ROUND(SUM(market_cap)/1e9, 2) AS total_market_cap_B,
+    ROUND(SUM(revenue_ttm)/1e9, 2) AS total_revenue_B,
+    ROUND(SUM(earnings_ttm)/1e9, 2) AS total_earnings_B,
+    ROUND(AVG(pe_ratio), 2) AS avg_pe,
+    ROUND(AVG(profit_margin_pct), 2) AS avg_profit_margin_pct,
+    ROUND(AVG(earnings_yield_pct), 2) AS avg_earnings_yield_pct
+FROM financial_data
+WHERE market_cap > 0
+GROUP BY country
+ORDER BY total_market_cap_B DESC;
+
+--TOP 20 COMPANIES BY PROFIT MARGIN
+SELECT
+    rank, company_name, country,
+    ROUND(market_cap/1e9, 2) AS market_cap_B,
+    ROUND(profit_margin_pct, 2) AS profit_margin_pct,
+    ROUND(earnings_yield_pct, 2) AS earnings_yield_pct,
+    ROUND(price_to_sales, 2) AS price_to_sales,
+    pe_ratio
+FROM financial_data
+WHERE revenue_ttm > 1e9
+ORDER BY profit_margin_pct DESC
+LIMIT 20;
+
+--VALUATION SCREEN (PE < 20, PM > 10%)
+SELECT
+    company_name, country, symbol,
+    ROUND(market_cap/1e9,1) AS mktcap_B,
+    pe_ratio,
+    ROUND(profit_margin_pct,1) AS profit_margin_pct,
+    ROUND(dividend_yield,2) AS div_yield_pct,
+    ROUND(earnings_yield_pct,2) AS earnings_yield_pct
+FROM financial_data
+WHERE pe_ratio BETWEEN 1 AND 20
+  AND profit_margin_pct > 10
+  AND market_cap > 1e10
+ORDER BY earnings_yield_pct DESC
+LIMIT 50;
+
+--SECTOR DIVIDEND LEADERS
+SELECT
+    company_name, country,
+    ROUND(dividend_yield, 2) AS dividend_yield_pct,
+    ROUND(profit_margin_pct, 2) AS profit_margin_pct,
+    ROUND(market_cap/1e9, 1) AS mktcap_B
+FROM financial_data
+WHERE dividend_yield BETWEEN 0.5 AND 20
+ORDER BY dividend_yield DESC
+LIMIT 30;
+
+--COMPARATIVE INDEX: Country Avg vs Global Avg
+WITH global_avg AS (
+    SELECT
+        AVG(pe_ratio) AS g_pe,
+        AVG(profit_margin_pct) AS g_pm,
+        AVG(dividend_yield) AS g_div
+    FROM financial_data WHERE pe_ratio BETWEEN 1 AND 200
+)
+SELECT
+    f.country,
+    ROUND(AVG(f.pe_ratio),1) AS country_pe,
+    ROUND(g.g_pe,1) AS global_pe,
+    ROUND(AVG(f.profit_margin_pct),1) AS country_pm_pct,
+    ROUND(g.g_pm,1) AS global_pm_pct,
+    ROUND(AVG(f.pe_ratio) - g.g_pe, 1) AS pe_vs_global
+FROM financial_data f, global_avg g
+WHERE f.pe_ratio BETWEEN 1 AND 200
+GROUP BY f.country, g.g_pe, g.g_pm, g.g_div
+ORDER BY country_pe;
+
+
+print("\nExports saved:")
+print("  company_master.csv")
+print("  country_summary.csv")
+print("\nAnalysis complete.")
